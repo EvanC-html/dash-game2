@@ -1,246 +1,656 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dash Ultimate</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Dash Ultimate — Revamped</title>
 <style>
-body{margin:0;background:black;overflow:hidden;font-family:Arial}
-canvas{display:block;margin:auto;background:#111}
-
-.menu{
- position:fixed;
- inset:0;
- background:rgba(0,0,0,.9);
- display:flex;
- align-items:center;
- justify-content:center;
- z-index:10;
-}
-
-.menuBox{
- background:#111;
- padding:22px;
- border-radius:12px;
- text-align:center;
- color:white;
-}
-
-button{
- display:block;
- width:180px;
- margin:8px auto;
- padding:12px;
- font-size:16px;
- border:none;
- border-radius:8px;
-}
-
-button.locked{
- opacity:.4;
-}
-
+  :root{
+    --bg:#080810;
+    --panel: rgba(255,255,255,0.04);
+    --accent: #00f0ff;
+    --text: #e9f7ff;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;background:var(--bg);-webkit-tap-highlight-color:transparent}
+  #container{position:relative;width:100%;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;width:100%;height:100%;background:linear-gradient(180deg,#04101b,#07121a)}
+  /* Menu overlay */
+  .menu{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.66);z-index:30}
+  .menuBox{background:rgba(10,10,12,0.92);padding:18px;border-radius:12px;color:var(--text);min-width:300px;text-align:center}
+  .menuTitle{font-size:20px;font-weight:800;margin-bottom:6px}
+  .muted{opacity:0.75;font-size:13px;margin-bottom:12px}
+  .btn{display:inline-block;margin:6px;padding:10px 14px;border-radius:8px;background:var(--panel);color:var(--text);border:1px solid rgba(255,255,255,0.03);font-weight:700}
+  .btn.small{padding:6px 10px;font-size:13px}
+  .locked{opacity:0.42}
+  /* HUD */
+  #hud{position:absolute;left:12px;top:12px;color:var(--text);z-index:35}
+  #hud .stat{margin-bottom:6px}
+  /* hint */
+  .hint{position:absolute;left:12px;bottom:12px;color:rgba(255,255,255,0.5);font-size:12px;z-index:35}
 </style>
 </head>
 <body>
+<div id="container">
+  <canvas id="game"></canvas>
 
-<canvas id="c"></canvas>
+  <div id="menu" class="menu" aria-hidden="false">
+    <div class="menuBox" id="menuBox">
+      <div class="menuTitle">Dash Ultimate</div>
+      <div class="muted">Tap a level to start. Collect stars to unlock next levels.</div>
+      <div id="levelsWrap"></div>
+      <div style="height:12px"></div>
+      <div id="menuFooter" style="display:flex;gap:8px;justify-content:center;align-items:center">
+        <button class="btn small" id="btnResetProgress">Reset Progress</button>
+        <div style="color:rgba(255,255,255,0.7);font-size:13px;margin-left:6px" id="starsTotal">Stars: 0</div>
+      </div>
+    </div>
+  </div>
 
-<div id="menu" class="menu">
- <div class="menuBox" id="menuBox"></div>
+  <div id="hud">
+    <div class="stat" id="levelLabel">Level: —</div>
+    <div class="stat" id="progressLabel">Progress: 0%</div>
+    <div class="stat" id="bestLabel">Best Stars: 0</div>
+  </div>
+
+  <div class="hint">Controls: Tap to jump / hold to fly (ship). After death tap to retry. Add to Home Screen for app-like play.</div>
 </div>
 
+<!-- audio - simple elements, no analyser -->
+<audio id="music" loop preload="auto">
+  <source src="https://cdn.pixabay.com/audio/2022/03/15/audio_7a51bb7d1a.mp3" type="audio/mpeg">
+</audio>
+<audio id="sfxJump" preload="auto">
+  <source src="https://cdn.pixabay.com/audio/2021/08/04/audio_19e6a2cf6b.mp3" type="audio/mpeg">
+</audio>
+<audio id="sfxHit" preload="auto">
+  <source src="https://cdn.pixabay.com/audio/2021/08/09/audio_e5345c6f3a.mp3" type="audio/mpeg">
+</audio>
+
 <script>
-const canvas=document.getElementById("c");
-const ctx=canvas.getContext("2d");
+/* Dash Ultimate — Single-file game
+   - iPhone-safe: pointer events, simple audio elements (no analyser)
+   - Menu buttons fixed for mobile
+   - Tap-to-retry, death particles, jump particles
+   - 5 levels, unlock system, stars, modes
+*/
 
-function resize(){
- canvas.width=innerWidth;
- canvas.height=innerHeight;
+// ---------- Canvas setup ----------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: true });
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  // fill container
+  canvas.width = Math.floor(window.innerWidth * DPR);
+  canvas.height = Math.floor(window.innerHeight * DPR);
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
+window.addEventListener('resize', resize);
 resize();
-addEventListener("resize",resize);
 
-let ground,speed,gravity=0.7;
-let obstacles=[],platforms=[],stars=[];
-let level=1;
-let unlocked=Number(localStorage.getItem("unlock")||1);
-let collectedStars=Number(localStorage.getItem("stars")||0);
-let progress,levelLength;
-let gameOver=false,finished=false;
-let mode="cube";
+// ---------- DOM refs ----------
+const menu = document.getElementById('menu');
+const levelsWrap = document.getElementById('levelsWrap');
+const starsTotalEl = document.getElementById('starsTotal');
+const levelLabelEl = document.getElementById('levelLabel');
+const progressLabelEl = document.getElementById('progressLabel');
+const bestLabelEl = document.getElementById('bestLabel');
+const btnResetProgress = document.getElementById('btnResetProgress');
 
-const player={x:100,y:0,s:30,vy:0,grounded:false};
+const music = document.getElementById('music');
+const sfxJump = document.getElementById('sfxJump');
+const sfxHit = document.getElementById('sfxHit');
 
-const levels=[
- {len:2400,spd:5,mode:"cube"},
- {len:3000,spd:6,mode:"ship"},
- {len:3600,spd:6.5,mode:"cube"},
- {len:4200,spd:7,mode:"wave"},
- {len:4800,spd:7.5,mode:"cube"}
+let audioStarted = false;
+function startAudioOnGesture() {
+  if (audioStarted) return;
+  audioStarted = true;
+  music.volume = 0.42;
+  music.play().catch(()=>{});
+}
+
+// ---------- Game state ----------
+let gameWidth = window.innerWidth;
+let gameHeight = window.innerHeight;
+let groundY;
+let gravity = 0.78;
+let level = 1;
+let unlocked = Number(localStorage.getItem('dash_unlocked') || 1);
+let totalStars = Number(localStorage.getItem('dash_stars') || 0);
+let bestStars = Number(localStorage.getItem('dash_best') || 0);
+
+let mode = 'cube'; // cube | ship | wave
+let speed = 6;
+let levelLength = 3000; // world units to travel to finish
+let progress = 0;
+let obstacles = [];
+let platforms = [];
+let stars = [];
+let particles = [];
+let spawnTimer = 0;
+let gameOver = false;
+let finished = false;
+let paused = false;
+let lastTime = 0;
+
+// Player object
+const player = {
+  x: 120,
+  y: 0,
+  size: 36,
+  vy: 0,
+  grounded: false,
+  rotation: 0 // not used for spinning cube - kept minimal
+};
+
+// Level definitions (5 levels), modes change per level
+const LEVELS = [
+  {name:'Neon Start', len:2400, spd:5.0, mode:'cube', starsGoal:3},
+  {name:'Tech Flight', len:3200, spd:6.2, mode:'ship', starsGoal:3},
+  {name:'Pulse Rush', len:3800, spd:6.6, mode:'cube', starsGoal:3},
+  {name:'Wave Run', len:4600, spd:7.2, mode:'wave', starsGoal:3},
+  {name:'Final Surge', len:5200, spd:7.8, mode:'cube', starsGoal:3}
 ];
 
-function buildMenu(){
- const box=document.getElementById("menuBox");
- box.innerHTML="";
- box.innerHTML+=`<h2>Dash Ultimate</h2><p>Stars: ${collectedStars}</p>`;
+// ---------- Utility ----------
+function rand(min, max) { return Math.random() * (max - min) + min; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
- levels.forEach((_,i)=>{
-  const btn=document.createElement("button");
-  btn.textContent="Level "+(i+1);
-
-  if(i+1>unlocked){
-   btn.classList.add("locked");
-   btn.disabled=true;
-  }else{
-   btn.addEventListener("click",()=>startLevel(i+1));
-  }
-
-  box.appendChild(btn);
- });
+// ---------- Menu building (mobile-safe) ----------
+function buildMenu() {
+  levelsWrap.innerHTML = '';
+  starsTotalEl.textContent = 'Stars: ' + totalStars;
+  LEVELS.forEach((L,i)=>{
+    const idx = i+1;
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.textContent = `${idx}. ${L.name}`;
+    btn.style.display = 'block';
+    btn.style.width = '220px';
+    btn.style.margin = '8px auto';
+    if (idx > unlocked) {
+      btn.classList.add('locked');
+      btn.disabled = true;
+      btn.textContent += ' 🔒';
+    } else {
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        startLevel(idx);
+      });
+    }
+    levelsWrap.appendChild(btn);
+  });
 }
-
 buildMenu();
 
-function startLevel(n){
- level=n;
- const L=levels[n-1];
- speed=L.spd;
- levelLength=L.len;
- mode=L.mode;
+btnResetProgress.addEventListener('click', () => {
+  if (!confirm('Reset progress and stars?')) return;
+  localStorage.removeItem('dash_unlocked');
+  localStorage.removeItem('dash_stars');
+  localStorage.removeItem('dash_best');
+  unlocked = 1; totalStars = 0; bestStars = 0;
+  buildMenu();
+  updateHUD();
+});
 
- document.getElementById("menu").style.display="none";
- reset();
-}
-
-function reset(){
- obstacles=[];platforms=[];stars=[];
- gameOver=false;finished=false;
- ground=canvas.height*0.75;
- player.y=ground-player.s;
- player.vy=0;
- progress=0;
-
- for(let i=600;i<levelLength;i+=900){
-  stars.push({x:canvas.width+i,y:ground-100,r:8,collected:false});
- }
-}
-
-function jump(){
- if(gameOver||finished)return;
-
- if(mode==="cube" && player.grounded){
-  player.vy=-13;
-  player.grounded=false;
- }
- if(mode==="ship"){
-  player.vy=-10;
- }
-}
-
-addEventListener("touchstart",jump);
-addEventListener("keydown",e=>{if(e.code==="Space")jump();});
-
-setInterval(()=>{
- if(gameOver||finished)return;
- obstacles.push({x:canvas.width,y:ground-30,w:30,h:30});
- if(Math.random()<0.3){
-  platforms.push({x:canvas.width,y:ground-120,w:90,h:12,dir:1});
- }
-},1200);
-
-function hit(a,b){
- return a.x<b.x+b.w&&a.x+a.s>b.x&&a.y<b.y+b.h&&a.y+a.s>b.y;
-}
-
-function update(){
- if(gameOver||finished)return;
-
- if(mode!=="wave")player.vy+=gravity;
- player.y+=player.vy;
-
- if(player.y>=ground-player.s){
-  player.y=ground-player.s;
-  player.vy=0;
-  player.grounded=true;
- }
-
- obstacles.forEach(o=>{
-  o.x-=speed;
-  if(hit(player,o))gameOver=true;
- });
-
- platforms.forEach(p=>{
-  p.x-=speed;
-  p.y+=p.dir*0.4;
-  if(p.y<ground-180||p.y>ground-60)p.dir*=-1;
-  if(hit(player,p)&&player.vy>0){
-   player.y=p.y-player.s;
-   player.vy=0;
-   player.grounded=true;
+// ---------- Start / Reset ----------
+function startLevel(n) {
+  level = n;
+  const meta = LEVELS[level-1];
+  levelLength = meta.len;
+  speed = meta.spd;
+  mode = meta.mode;
+  progress = 0;
+  obstacles = [];
+  platforms = [];
+  stars = [];
+  particles = [];
+  spawnTimer = 0;
+  gameOver = false;
+  finished = false;
+  paused = false;
+  player.y = (gameHeight * 0.55);
+  player.vy = 0;
+  player.grounded = true;
+  // place ground
+  groundY = Math.floor(gameHeight * 0.72);
+  // spawn stars along the level (goal: 3 per level placed evenly)
+  const starCount = LEVELS[level-1].starsGoal || 3;
+  for (let i = 0; i < starCount; i++){
+    const offset = rand(600 + i*400, (levelLength - 400) - i*200);
+    stars.push({ x: gameWidth + offset, y: groundY - 120 - rand(0, 60), r: 9, collected: false });
   }
- });
-
- stars.forEach(s=>{
-  s.x-=speed;
-  if(!s.collected &&
-     Math.hypot(player.x+15-s.x,player.y+15-s.y)<20){
-   s.collected=true;
-   collectedStars++;
-   localStorage.setItem("stars",collectedStars);
-  }
- });
-
- stars=stars.filter(s=>!s.collected);
- obstacles=obstacles.filter(o=>o.x+o.w>0);
- platforms=platforms.filter(p=>p.x+p.w>0);
-
- progress+=speed;
- if(progress>=levelLength){
-  finished=true;
-  if(level===unlocked){
-   unlocked++;
-   localStorage.setItem("unlock",unlocked);
-  }
-  setTimeout(()=>{
-   document.getElementById("menu").style.display="flex";
-   buildMenu();
-  },1200);
- }
+  menu.style.display = 'none';
+  updateHUD();
+  startAudioOnGesture();
 }
 
+// ---------- Input (pointer down/up) ----------
+let pointerDown = false;
+function onPointerDown(e){
+  e.preventDefault();
+  pointerDown = true;
+  startAudioOnGesture();
+  if (gameOver) {
+    // tap to retry
+    restartLevel();
+    return;
+  }
+  // normal jump / fly
+  if (mode === 'cube'){
+    if (player.grounded) {
+      player.vy = -13;
+      player.grounded = false;
+      spawnJumpParticles();
+      playSFX(sfxJump);
+    }
+  } else if (mode === 'ship'){
+    player.vy = -10; // immediate upward velocity when pressing
+    spawnJumpParticles();
+    playSFX(sfxJump);
+  } else if (mode === 'wave'){
+    // wave mode: pressing sends you up gently
+    player.vy = -7;
+    spawnJumpParticles(6);
+    playSFX(sfxJump);
+  }
+}
+function onPointerUp(e){
+  e.preventDefault();
+  pointerDown = false;
+}
+window.addEventListener('pointerdown', onPointerDown, {passive:false});
+window.addEventListener('pointerup', onPointerUp, {passive:false});
+window.addEventListener('keydown', (e)=>{
+  if (e.code === 'Space') onPointerDown(e);
+  if (e.code === 'KeyR') restartLevel();
+});
+
+// ---------- Particles ----------
+function spawnJumpParticles(count=12){
+  for (let i=0;i<count;i++){
+    particles.push({
+      x: player.x + player.size/2 + rand(-6,6),
+      y: player.y + player.size - 6 + rand(-4,4),
+      vx: rand(-2.6,2.6),
+      vy: rand(-6.2,-2),
+      life: 36 + Math.random()*28,
+      size: 2 + Math.random()*3,
+      hue: rand(160, 260)
+    });
+  }
+}
+function spawnDeathParticles(){
+  const cx = player.x + player.size/2;
+  const cy = player.y + player.size/2;
+  const count = 36 + Math.floor(Math.random()*24);
+  for (let i=0;i<count;i++){
+    const angle = Math.random()*Math.PI*2;
+    const speed = rand(1.8, 7.5);
+    particles.push({
+      x: cx + Math.cos(angle) * rand(0,4),
+      y: cy + Math.sin(angle) * rand(0,4),
+      vx: Math.cos(angle) * speed + rand(-0.6,0.6),
+      vy: Math.sin(angle) * speed + rand(-1,1),
+      life: 40 + Math.random()*60,
+      size: 2 + Math.random()*4,
+      hue: rand(0, 60)
+    });
+  }
+  playSFX(sfxHit);
+}
+
+// ---------- Sound helper ----------
+function playSFX(node){
+  try {
+    node.currentTime = 0;
+    node.volume = 0.9;
+    node.play().catch(()=>{});
+  } catch(e){}
+}
+
+// ---------- Spawning obstacles & platforms ----------
+function spawnBlock(y) {
+  obstacles.push({ x: gameWidth + 40, y: y ?? (groundY - 36), w: 34, h: 34, type: 'block' });
+}
+function spawnSpike(y) {
+  obstacles.push({ x: gameWidth + 40, y: y ?? (groundY - 28), w: 28, h: 28, type: 'spike' });
+}
+function spawnPlatform(y) {
+  platforms.push({ x: gameWidth + 120, y: y ?? (groundY - 110), w: 96, h: 14, dir: Math.random() < 0.5 ? -1 : 1 });
+}
+
+// Spawning logic - beatless/procedural (timer-based)
+function spawnLogic(dt){
+  spawnTimer += dt * (speed / 5);
+  if (spawnTimer > 0.9 + Math.random()*0.8) {
+    // choose pattern based on progress
+    const r = Math.random();
+    if (r < 0.15) spawnPlatform(groundY - rand(120, 220));
+    else if (r < 0.5) spawnBlock(groundY - 36);
+    else spawnSpike(groundY - 28);
+    spawnTimer = 0;
+  }
+}
+
+// ---------- Collision ----------
+function rectCollide(a, b) {
+  return !(a.x + a.size < b.x || a.x > b.x + (b.w||0) || a.y + a.size < b.y || a.y > b.y + (b.h||0));
+}
+function spikeHit(a, b) {
+  // use rectangle collision for spikes as well
+  return rectCollide(a,b);
+}
+
+// ---------- Update loop ----------
+function update(dt){
+  if (menu.style.display !== 'none') return;
+  if (paused) return;
+
+  // mode-specific controls for continuous pointer hold
+  if (pointerDown) {
+    if (mode === 'ship') {
+      // while holding, apply slight upward thrust
+      player.vy += -0.4;
+      player.vy = clamp(player.vy, -12, 12);
+    } else if (mode === 'wave') {
+      // while holding, ascend slowly (we already set a burst on pointerdown)
+      player.vy = clamp(player.vy - 0.4, -12, 12);
+    }
+  } else {
+    if (mode === 'ship') {
+      // gravity applies when not holding
+      player.vy += 0.8;
+    }
+    if (mode === 'wave') {
+      // wave fall faster
+      player.vy += 0.9;
+    }
+  }
+
+  if (mode !== 'ship' && mode !== 'wave') {
+    // cube uses gravity normally
+    player.vy += gravity;
+  }
+
+  player.y += player.vy;
+  // ground collision
+  if (player.y >= groundY - player.size) {
+    if (!player.grounded) {
+      // land
+      player.grounded = true;
+      player.vy = 0;
+    }
+    player.y = groundY - player.size;
+  } else {
+    player.grounded = false;
+  }
+
+  // move obstacles and platforms left
+  obstacles.forEach(o => { o.x -= speed; });
+  platforms.forEach(p => { p.x -= speed; p.y += p.dir * 0.45; if (p.y < groundY - 260 || p.y > groundY - 60) p.dir *= -1; });
+
+  // update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const P = particles[i];
+    P.x += P.vx;
+    P.y += P.vy;
+    P.vy += 0.12;
+    P.life -= 1;
+    if (P.life <= 0) particles.splice(i, 1);
+  }
+
+  // update stars (collection)
+  for (let i = stars.length - 1; i >= 0; i--) {
+    const s = stars[i];
+    s.x -= speed;
+    if (!s.collected && Math.hypot((player.x + player.size/2) - s.x, (player.y + player.size/2) - s.y) < 28) {
+      s.collected = true;
+      totalStars++;
+      localStorage.setItem('dash_stars', totalStars);
+    }
+    if (s.x + 24 < -50 || s.collected) {
+      if (s.collected) stars.splice(i, 1);
+      else if (s.x + 24 < -50) stars.splice(i,1);
+    }
+  }
+
+  // obstacle collisions
+  for (let i = 0; i < obstacles.length; i++) {
+    const o = obstacles[i];
+    if (rectCollide(player, {x:o.x, y:o.y, w:o.w, h:o.h})) {
+      // death
+      if (!gameOver) {
+        gameOver = true;
+        spawnDeathParticles();
+        // stop music a moment (let audio continue, optional)
+        // show menu after short delay
+        setTimeout(() => {
+          menu.style.display = 'flex';
+          buildMenu(); // rebuild to update unlocks/stars
+        }, 350);
+      }
+    }
+  }
+
+  // platform collisions (land on top)
+  platforms.forEach(p => {
+    if (player.vy > 0 && player.x + player.size > p.x && player.x < p.x + p.w && player.y + player.size <= p.y + 8 && player.y + player.size >= p.y - 36) {
+      player.y = p.y - player.size;
+      player.vy = 0;
+      player.grounded = true;
+    }
+  });
+
+  // clean arrays
+  obstacles = obstacles.filter(o => o.x + o.w > -120);
+  platforms = platforms.filter(p => p.x + p.w > -160);
+
+  // spawn logic
+  spawnLogic(dt);
+
+  // progress
+  progress += speed * dt * 60; // scaled for dt
+  progress = clamp(progress, 0, levelLength);
+
+  // level finish
+  if (progress >= levelLength && !finished) {
+    finished = true;
+    // award stars based on remaining stars count vs starGoal
+    const starGoal = LEVELS[level-1].starsGoal || 3;
+    // count collected this run (we placed star objects and removed when collected)
+    const collectedThisRun = starGoal - stars.length; // because we initially added starGoal stars
+    const awarded = clamp(collectedThisRun, 0, starGoal);
+    totalStars += 0; // already added on collection
+    // unlock next level if we were at highest unlocked
+    if (level === unlocked && unlocked < LEVELS.length) {
+      unlocked++;
+      localStorage.setItem('dash_unlocked', unlocked);
+    }
+    // save best stars
+    if (totalStars > bestStars) {
+      bestStars = totalStars;
+      localStorage.setItem('dash_best', bestStars);
+    }
+    // return to menu after short delay
+    setTimeout(() => {
+      menu.style.display = 'flex';
+      buildMenu();
+    }, 900);
+  }
+
+  updateHUD();
+}
+
+// ---------- Restart / retry ----------
+function restartLevel(){
+  // restart current level: reset arrays and progress
+  obstacles = [];
+  platforms = [];
+  stars = [];
+  particles = [];
+  progress = 0;
+  spawnTimer = 0;
+  gameOver = false;
+  finished = false;
+  player.y = groundY - player.size;
+  player.vy = 0;
+  player.grounded = true;
+  // respawn stars
+  const starCount = LEVELS[level-1].starsGoal || 3;
+  for (let i = 0; i < starCount; i++){
+    const offset = rand(600 + i*400, (levelLength - 400) - i*200);
+    stars.push({ x: gameWidth + offset, y: groundY - 120 - rand(0, 60), r: 9, collected: false });
+  }
+  menu.style.display = 'none';
+  updateHUD();
+  startAudioOnGesture();
+}
+
+// ---------- HUD ----------
+function updateHUD(){
+  levelLabelEl.textContent = `Level: ${level} (${LEVELS[level-1]?.mode || mode})`;
+  const pct = Math.floor((progress/levelLength)*100);
+  progressLabelEl.textContent = `Progress: ${clamp(pct,0,100)}%`;
+  starsTotalEl.textContent = 'Stars: ' + totalStars;
+  bestLabelEl.textContent = 'Best Stars: ' + bestStars;
+}
+
+// ---------- Draw ----------
 function draw(){
- ctx.clearRect(0,0,canvas.width,canvas.height);
+  // clear
+  ctx.clearRect(0,0,canvas.width/DPR,canvas.height/DPR);
+  const W = canvas.width / DPR;
+  const H = canvas.height / DPR;
+  // background bands
+  ctx.fillStyle = '#031017';
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 4; i++){
+    ctx.fillStyle = `rgba(8,14,30,${0.04 + i*0.02})`;
+    ctx.fillRect(0, 60 + i*60, W, 14);
+  }
 
- ctx.fillStyle="#222";
- ctx.fillRect(0,ground,canvas.width,canvas.height-ground);
+  // ground
+  ctx.fillStyle = '#111217';
+  ctx.fillRect(0, groundY, W, H - groundY);
 
- ctx.fillStyle="cyan";
- ctx.fillRect(player.x,player.y,player.s,player.s);
+  // platforms (behind player)
+  platforms.forEach(p => {
+    ctx.fillStyle = '#00cfcf';
+    roundRect(ctx, p.x, p.y, p.w, p.h, 6, true, false);
+  });
 
- ctx.fillStyle="white";
- obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+  // obstacles
+  obstacles.forEach(o => {
+    if (o.type === 'spike') {
+      ctx.fillStyle = '#ff5b5b';
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y + o.h);
+      ctx.lineTo(o.x + o.w/2, o.y);
+      ctx.lineTo(o.x + o.w, o.y + o.h);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      roundRect(ctx, o.x, o.y, o.w, o.h, 6, true, false);
+    }
+  });
 
- ctx.fillStyle="lime";
- platforms.forEach(p=>ctx.fillRect(p.x,p.y,p.w,p.h));
+  // stars
+  stars.forEach(s => {
+    ctx.fillStyle = '#ffd800';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    ctx.fill();
+  });
 
- ctx.fillStyle="yellow";
- stars.forEach(s=>{
+  // player (non-spinning glide cube)
+  ctx.save();
+  ctx.fillStyle = '#00f0ff';
+  roundRect(ctx, player.x, player.y, player.size, player.size, 6, true, false);
+  ctx.restore();
+
+  // particles
+  particles.forEach(p => {
+    ctx.fillStyle = `hsla(${p.hue},90%,60%,${Math.max(0.06, p.life/100)})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+    ctx.fill();
+  });
+
+  // Game over text
+  if (gameOver) {
+    ctx.fillStyle = 'white';
+    ctx.font = '28px Arial';
+    ctx.fillText('YOU DIED — TAP TO RETRY', Math.max(12, W/2 - 150), H/2 - 10);
+  }
+
+  // Level complete
+  if (finished) {
+    ctx.fillStyle = 'white';
+    ctx.font = '28px Arial';
+    ctx.fillText('LEVEL COMPLETE!', Math.max(12, W/2 - 120), H/2 - 10);
+  }
+}
+
+// rounded rect helper
+function roundRect(ctx, x, y, w, h, r, fill, stroke){
+  if (typeof r === 'undefined') r = 5;
   ctx.beginPath();
-  ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
-  ctx.fill();
- });
-
- ctx.fillStyle="white";
- ctx.fillText(`Level ${level} (${mode})`,20,30);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
 }
 
-function loop(){
- update();
- draw();
- requestAnimationFrame(loop);
+// ---------- Main loop ----------
+function loop(ts){
+  if (!lastTime) lastTime = ts;
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  // sync game size variables
+  gameWidth = canvas.width / DPR;
+  gameHeight = canvas.height / DPR;
+  if (!groundY) groundY = Math.floor(gameHeight * 0.72);
+
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
 }
-loop();
+requestAnimationFrame(loop);
+
+// ---------- On load: small responsive adjustments ----------
+window.addEventListener('load', () => {
+  // ensure menu visible
+  menu.style.display = 'flex';
+  // update hud values
+  updateHUD();
+});
+
+// ---------- Touch area note: ensure first gesture starts audio ----------
+document.addEventListener('pointerdown', startAudioOnGesture, {once:true});
+
+// ---------- Ensure save values displayed ----------
+function refreshLocalStats(){
+  unlocked = Number(localStorage.getItem('dash_unlocked') || unlocked);
+  totalStars = Number(localStorage.getItem('dash_stars') || totalStars);
+  bestStars = Number(localStorage.getItem('dash_best') || bestStars);
+  updateHUD();
+}
+refreshLocalStats();
+
 </script>
-
 </body>
 </html>
