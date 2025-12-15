@@ -4,20 +4,12 @@
 <meta charset="UTF-8">
 <title>Velocity Run</title>
 
-<!--
-SETUP:
-1. Create a file named index.html
-2. Paste this entire code inside
-3. Open in any modern browser
--->
-
 <style>
 html, body {
     margin: 0;
     padding: 0;
     background: #0b0b10;
     overflow: hidden;
-    font-family: Arial, sans-serif;
 }
 canvas {
     display: block;
@@ -31,296 +23,190 @@ canvas {
 <canvas id="game"></canvas>
 
 <script>
-/* =====================================================
-   CONFIG
-===================================================== */
-const CONFIG = {
-    WIDTH: 900,
-    HEIGHT: 500,
+/* ===================== CONFIG ===================== */
+const W = 900;
+const H = 500;
+const GRAVITY = 2800;
+const JUMP_FORCE = 850;
+const MAX_JUMP_HOLD = 0.22;
+const PLAYER_SIZE = 32;
+const GROUND_HEIGHT = 60;
+const BASE_SPEED = 300;
+const SPEED_INCREASE = 6;
 
-    GRAVITY: 2800,
-    JUMP_FORCE: 850,
-    MAX_JUMP_HOLD: 0.22,
-
-    PLAYER_SIZE: 32,
-    GROUND_HEIGHT: 60,
-
-    BASE_SPEED: 300,
-    SPEED_INCREASE: 6,
-
-    OBSTACLE_MIN: 260,
-    OBSTACLE_MAX: 420,
-
-    FREEZE_TIME: 0.08,
-    SHAKE_DECAY: 18
-};
-
-/* =====================================================
-   CANVAS
-===================================================== */
+/* ===================== CANVAS ===================== */
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
-canvas.width = CONFIG.WIDTH;
-canvas.height = CONFIG.HEIGHT;
+canvas.width = W;
+canvas.height = H;
 
-/* =====================================================
-   INPUT
-===================================================== */
-const Input = { down:false, pressed:false };
+/* ===================== INPUT ===================== */
+let jumpHeld = false;
+let jumpPressed = false;
 
 window.addEventListener("keydown", e => {
     if (e.code === "Space" || e.code === "ArrowUp") {
-        if (!Input.down) Input.pressed = true;
-        Input.down = true;
+        if (!jumpHeld) jumpPressed = true;
+        jumpHeld = true;
     }
 });
 window.addEventListener("keyup", e => {
     if (e.code === "Space" || e.code === "ArrowUp") {
-        Input.down = false;
+        jumpHeld = false;
     }
 });
 
-/* =====================================================
-   UTIL
-===================================================== */
-const rand = (a,b)=>Math.random()*(b-a)+a;
-
-const overlap = (a,b)=>
-    a.x < b.x+b.w &&
-    a.x+a.w > b.x &&
-    a.y < b.y+b.h &&
-    a.y+a.h > b.y;
-
-/* =====================================================
-   GAME STATE
-===================================================== */
+/* ===================== STATE ===================== */
 let state = "start";
-let speed = CONFIG.BASE_SPEED;
+let speed = BASE_SPEED;
 let score = 0;
-let freeze = 0;
-let shake = 0;
 
-/* =====================================================
-   PLAYER
-===================================================== */
+/* ===================== PLAYER ===================== */
 const player = {
     x: 120,
     y: 0,
     vy: 0,
     grounded: false,
-    jumpHold: 0,
-    update(dt){
-        if (Input.pressed && this.grounded) {
-            this.vy = -CONFIG.JUMP_FORCE;
-            this.jumpHold = CONFIG.MAX_JUMP_HOLD;
-            this.grounded = false;
-            spawnParticles(this.x+16,this.y+32,8,"#7cf");
-        }
-        Input.pressed = false;
-
-        if (Input.down && this.jumpHold>0) {
-            this.vy -= 1400*dt;
-            this.jumpHold -= dt;
-        }
-
-        this.vy += CONFIG.GRAVITY*dt;
-        this.y += this.vy*dt;
-
-        if (this.y + CONFIG.PLAYER_SIZE >= groundY()) {
-            if (!this.grounded) spawnParticles(this.x+16,groundY(),6,"#fff");
-            this.y = groundY() - CONFIG.PLAYER_SIZE;
-            this.vy = 0;
-            this.grounded = true;
-            this.jumpHold = 0;
-        }
-    },
-    draw(){
-        ctx.fillStyle="#fff";
-        ctx.fillRect(this.x,this.y,32,32);
-    }
+    jumpHold: 0
 };
 
-/* =====================================================
-   OBSTACLES
-===================================================== */
+/* ===================== OBSTACLES ===================== */
 let obstacles = [];
-let nextSpawn = 500;
+let spawnTimer = 0;
 
-function spawnObstacle(){
-    const type = Math.random()<0.7 ? "spike" : "block";
-    if(type==="spike"){
+/* ===================== UTIL ===================== */
+function rand(a,b){ return Math.random()*(b-a)+a; }
+
+function rectHit(a,b){
+    return a.x < b.x+b.w &&
+           a.x+a.w > b.x &&
+           a.y < b.y+b.h &&
+           a.y+a.h > b.y;
+}
+
+function groundY(){ return H - GROUND_HEIGHT; }
+
+/* ===================== RESET ===================== */
+function resetGame(){
+    state = "playing";
+    speed = BASE_SPEED;
+    score = 0;
+    obstacles = [];
+    spawnTimer = 0;
+    player.y = 0;
+    player.vy = 0;
+    player.grounded = false;
+}
+
+/* ===================== UPDATE ===================== */
+function update(dt){
+    if(state !== "playing") return;
+
+    speed += SPEED_INCREASE * dt;
+    score += dt * speed * 0.02;
+
+    // Jump
+    if (jumpPressed && player.grounded) {
+        player.vy = -JUMP_FORCE;
+        player.jumpHold = MAX_JUMP_HOLD;
+        player.grounded = false;
+    }
+    jumpPressed = false;
+
+    if (jumpHeld && player.jumpHold > 0) {
+        player.vy -= 1400 * dt;
+        player.jumpHold -= dt;
+    }
+
+    // Physics
+    player.vy += GRAVITY * dt;
+    player.y += player.vy * dt;
+
+    // Ground collision
+    if (player.y + PLAYER_SIZE >= groundY()) {
+        player.y = groundY() - PLAYER_SIZE;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumpHold = 0;
+    }
+
+    // Obstacles
+    spawnTimer -= dt * speed;
+    if (spawnTimer <= 0) {
         obstacles.push({
-            x: CONFIG.WIDTH,
-            y: groundY()-30,
+            x: W,
+            y: groundY() - 30,
             w: 30,
-            h: 30,
-            type
+            h: 30
         });
-    } else {
-        obstacles.push({
-            x: CONFIG.WIDTH,
-            y: groundY()-rand(90,140),
-            w: 60,
-            h: 20,
-            type
-        });
+        spawnTimer = rand(260,420);
     }
-}
 
-function updateObstacles(dt){
-    nextSpawn -= speed*dt;
-    if(nextSpawn<=0){
-        spawnObstacle();
-        nextSpawn = rand(CONFIG.OBSTACLE_MIN,CONFIG.OBSTACLE_MAX);
-    }
-    obstacles.forEach(o=>o.x-=speed*dt);
-    obstacles = obstacles.filter(o=>o.x+o.w>0);
-}
+    obstacles.forEach(o => o.x -= speed * dt);
+    obstacles = obstacles.filter(o => o.x + o.w > 0);
 
-function drawObstacles(){
-    obstacles.forEach(o=>{
-        ctx.fillStyle = o.type==="spike"?"#f55":"#888";
-        ctx.fillRect(o.x,o.y,o.w,o.h);
-    });
-}
-
-/* =====================================================
-   PARTICLES
-===================================================== */
-let particles=[];
-
-function spawnParticles(x,y,count,color){
-    for(let i=0;i<count;i++){
-        particles.push({
-            x,y,
-            vx:rand(-300,300),
-            vy:rand(-600,0),
-            life:rand(0.3,0.6),
-            color
-        });
-    }
-}
-
-function updateParticles(dt){
-    particles.forEach(p=>{
-        p.life-=dt;
-        p.vy+=CONFIG.GRAVITY*dt*0.6;
-        p.x+=p.vx*dt;
-        p.y+=p.vy*dt;
-    });
-    particles=particles.filter(p=>p.life>0);
-}
-
-function drawParticles(){
-    particles.forEach(p=>{
-        ctx.globalAlpha=p.life;
-        ctx.fillStyle=p.color;
-        ctx.fillRect(p.x,p.y,4,4);
-        ctx.globalAlpha=1;
-    });
-}
-
-/* =====================================================
-   COLLISION / DEATH
-===================================================== */
-function checkDeath(){
-    for(const o of obstacles){
-        if(overlap(player,{x:o.x,y:o.y,w:o.w,h:o.h})){
-            die();
-            break;
+    // Death
+    for (let o of obstacles) {
+        if (rectHit(player, o)) {
+            state = "dead";
         }
     }
 }
 
-function die(){
-    state="dead";
-    freeze=CONFIG.FREEZE_TIME;
-    shake=16;
-    spawnParticles(player.x+16,player.y+16,24,"#f55");
+/* ===================== DRAW ===================== */
+function draw(){
+    ctx.clearRect(0,0,W,H);
+
+    // Ground
+    ctx.fillStyle = "#222";
+    ctx.fillRect(0, groundY(), W, GROUND_HEIGHT);
+
+    // Obstacles
+    ctx.fillStyle = "#f55";
+    obstacles.forEach(o=>{
+        ctx.fillRect(o.x,o.y,o.w,o.h);
+    });
+
+    // Player
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(player.x,player.y,PLAYER_SIZE,PLAYER_SIZE);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "20px Arial";
+
+    if(state === "start"){
+        ctx.textAlign = "center";
+        ctx.fillText("PRESS SPACE TO START", W/2, H/2);
+    }
+    else if(state === "playing"){
+        ctx.textAlign = "left";
+        ctx.fillText("Score: " + Math.floor(score), 20, 30);
+    }
+    else if(state === "dead"){
+        ctx.textAlign = "center";
+        ctx.fillText("GAME OVER", W/2, H/2 - 20);
+        ctx.fillText("PRESS SPACE TO RESTART", W/2, H/2 + 20);
+    }
 }
 
-/* =====================================================
-   RESET
-===================================================== */
-function reset(){
-    state="playing";
-    speed=CONFIG.BASE_SPEED;
-    score=0;
-    obstacles=[];
-    particles=[];
-    nextSpawn=400;
-    player.y=0;
-    player.vy=0;
-}
-
-/* =====================================================
-   HELPERS
-===================================================== */
-const groundY = ()=>CONFIG.HEIGHT-CONFIG.GROUND_HEIGHT;
-
-/* =====================================================
-   GAME LOOP
-===================================================== */
-let last=0;
+/* ===================== LOOP ===================== */
+let last = 0;
 function loop(t){
-    const dt=Math.min((t-last)/1000,0.033);
-    last=t;
+    const dt = Math.min((t - last) / 1000, 0.033);
+    last = t;
 
-    if(freeze>0){ freeze-=dt; draw(); requestAnimationFrame(loop); return; }
+    if(state === "start" && jumpPressed){
+        jumpPressed = false;
+        resetGame();
+    }
+    if(state === "dead" && jumpPressed){
+        jumpPressed = false;
+        resetGame();
+    }
 
     update(dt);
     draw();
     requestAnimationFrame(loop);
-}
-
-function update(dt){
-    if(state==="playing"){
-        speed+=CONFIG.SPEED_INCREASE*dt;
-        score+=speed*dt*0.02;
-        player.update(dt);
-        updateObstacles(dt);
-        updateParticles(dt);
-        checkDeath();
-    }
-}
-
-function draw(){
-    ctx.save();
-    if(shake>0){
-        ctx.translate(rand(-shake,shake),rand(-shake,shake));
-        shake-=CONFIG.SHAKE_DECAY;
-    }
-
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-
-    ctx.fillStyle="#222";
-    ctx.fillRect(0,groundY(),canvas.width,CONFIG.GROUND_HEIGHT);
-
-    drawObstacles();
-    drawParticles();
-    player.draw();
-
-    ctx.restore();
-
-    ctx.fillStyle="#fff";
-    ctx.font="20px Arial";
-
-    if(state==="start"){
-        ctx.textAlign="center";
-        ctx.fillText("PRESS SPACE TO START",canvas.width/2,canvas.height/2);
-        if(Input.pressed){ Input.pressed=false; reset(); }
-    }
-
-    if(state==="playing"){
-        ctx.fillText("Score: "+Math.floor(score),20,30);
-    }
-
-    if(state==="dead"){
-        ctx.textAlign="center";
-        ctx.fillText("FINAL SCORE: "+Math.floor(score),canvas.width/2,canvas.height/2);
-        ctx.fillText("PRESS SPACE TO RESTART",canvas.width/2,canvas.height/2+40);
-        if(Input.pressed){ Input.pressed=false; reset(); }
-    }
 }
 
 requestAnimationFrame(loop);
