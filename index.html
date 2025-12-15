@@ -1,289 +1,329 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dash Velocity</title>
+<meta charset="UTF-8">
+<title>Velocity Run</title>
+
+<!--
+SETUP:
+1. Create a file named index.html
+2. Paste this entire code inside
+3. Open in any modern browser
+-->
+
 <style>
-body{margin:0;background:black;overflow:hidden;font-family:Arial}
-canvas{display:block;margin:auto;background:#111}
-
-.menu{
- position:fixed;
- inset:0;
- background:rgba(0,0,0,.9);
- display:flex;
- align-items:center;
- justify-content:center;
- z-index:10;
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #0b0b10;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
 }
-
-.menuBox{
- background:#111;
- padding:24px;
- border-radius:14px;
- text-align:center;
- color:white;
- width:220px;
+canvas {
+    display: block;
+    margin: auto;
+    background: #111;
 }
-
-button{
- display:block;
- width:100%;
- margin:8px 0;
- padding:12px;
- font-size:16px;
- border:none;
- border-radius:8px;
-}
-
-button.locked{opacity:.4}
 </style>
 </head>
 <body>
 
-<canvas id="c"></canvas>
-
-<div id="menu" class="menu">
- <div class="menuBox" id="menuBox"></div>
-</div>
+<canvas id="game"></canvas>
 
 <script>
-/* ============ SETUP ============ */
-const canvas=document.getElementById("c");
-const ctx=canvas.getContext("2d");
+/* =====================================================
+   CONFIG
+===================================================== */
+const CONFIG = {
+    WIDTH: 900,
+    HEIGHT: 500,
 
-function resize(){
- canvas.width=innerWidth;
- canvas.height=innerHeight;
-}
-resize();
-addEventListener("resize",resize);
+    GRAVITY: 2800,
+    JUMP_FORCE: 850,
+    MAX_JUMP_HOLD: 0.22,
 
-let gravity=0.85;
-let ground;
-let baseSpeed, speed, levelLength, progress;
-let gameOver=false, finished=false;
+    PLAYER_SIZE: 32,
+    GROUND_HEIGHT: 60,
 
-const player={
- x:120, y:0, s:30,
- vy:0, grounded:false
+    BASE_SPEED: 300,
+    SPEED_INCREASE: 6,
+
+    OBSTACLE_MIN: 260,
+    OBSTACLE_MAX: 420,
+
+    FREEZE_TIME: 0.08,
+    SHAKE_DECAY: 18
 };
 
-let obstacles=[], particles=[];
-let level=1;
-let unlocked=Number(localStorage.getItem("unlock")||1);
+/* =====================================================
+   CANVAS
+===================================================== */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = CONFIG.WIDTH;
+canvas.height = CONFIG.HEIGHT;
 
-const levels=[
- {len:2200,spd:6},
- {len:2800,spd:7},
- {len:3400,spd:7.8},
- {len:4000,spd:8.5},
- {len:4600,spd:9.2}
-];
+/* =====================================================
+   INPUT
+===================================================== */
+const Input = { down:false, pressed:false };
 
-/* ============ MENU ============ */
-function buildMenu(){
- const box=document.getElementById("menuBox");
- box.innerHTML="<h2>Dash Velocity</h2>";
+window.addEventListener("keydown", e => {
+    if (e.code === "Space" || e.code === "ArrowUp") {
+        if (!Input.down) Input.pressed = true;
+        Input.down = true;
+    }
+});
+window.addEventListener("keyup", e => {
+    if (e.code === "Space" || e.code === "ArrowUp") {
+        Input.down = false;
+    }
+});
 
- levels.forEach((_,i)=>{
-  const b=document.createElement("button");
-  b.textContent="Level "+(i+1);
-  if(i+1>unlocked){
-   b.className="locked";
-   b.disabled=true;
-  }else{
-   b.onclick=()=>startLevel(i+1);
-  }
-  box.appendChild(b);
- });
+/* =====================================================
+   UTIL
+===================================================== */
+const rand = (a,b)=>Math.random()*(b-a)+a;
+
+const overlap = (a,b)=>
+    a.x < b.x+b.w &&
+    a.x+a.w > b.x &&
+    a.y < b.y+b.h &&
+    a.y+a.h > b.y;
+
+/* =====================================================
+   GAME STATE
+===================================================== */
+let state = "start";
+let speed = CONFIG.BASE_SPEED;
+let score = 0;
+let freeze = 0;
+let shake = 0;
+
+/* =====================================================
+   PLAYER
+===================================================== */
+const player = {
+    x: 120,
+    y: 0,
+    vy: 0,
+    grounded: false,
+    jumpHold: 0,
+    update(dt){
+        if (Input.pressed && this.grounded) {
+            this.vy = -CONFIG.JUMP_FORCE;
+            this.jumpHold = CONFIG.MAX_JUMP_HOLD;
+            this.grounded = false;
+            spawnParticles(this.x+16,this.y+32,8,"#7cf");
+        }
+        Input.pressed = false;
+
+        if (Input.down && this.jumpHold>0) {
+            this.vy -= 1400*dt;
+            this.jumpHold -= dt;
+        }
+
+        this.vy += CONFIG.GRAVITY*dt;
+        this.y += this.vy*dt;
+
+        if (this.y + CONFIG.PLAYER_SIZE >= groundY()) {
+            if (!this.grounded) spawnParticles(this.x+16,groundY(),6,"#fff");
+            this.y = groundY() - CONFIG.PLAYER_SIZE;
+            this.vy = 0;
+            this.grounded = true;
+            this.jumpHold = 0;
+        }
+    },
+    draw(){
+        ctx.fillStyle="#fff";
+        ctx.fillRect(this.x,this.y,32,32);
+    }
+};
+
+/* =====================================================
+   OBSTACLES
+===================================================== */
+let obstacles = [];
+let nextSpawn = 500;
+
+function spawnObstacle(){
+    const type = Math.random()<0.7 ? "spike" : "block";
+    if(type==="spike"){
+        obstacles.push({
+            x: CONFIG.WIDTH,
+            y: groundY()-30,
+            w: 30,
+            h: 30,
+            type
+        });
+    } else {
+        obstacles.push({
+            x: CONFIG.WIDTH,
+            y: groundY()-rand(90,140),
+            w: 60,
+            h: 20,
+            type
+        });
+    }
 }
-buildMenu();
 
-/* ============ GAME FLOW ============ */
-function startLevel(n){
- level=n;
- baseSpeed=levels[n-1].spd;
- speed=baseSpeed;
- levelLength=levels[n-1].len;
- document.getElementById("menu").style.display="none";
- reset();
+function updateObstacles(dt){
+    nextSpawn -= speed*dt;
+    if(nextSpawn<=0){
+        spawnObstacle();
+        nextSpawn = rand(CONFIG.OBSTACLE_MIN,CONFIG.OBSTACLE_MAX);
+    }
+    obstacles.forEach(o=>o.x-=speed*dt);
+    obstacles = obstacles.filter(o=>o.x+o.w>0);
 }
 
+function drawObstacles(){
+    obstacles.forEach(o=>{
+        ctx.fillStyle = o.type==="spike"?"#f55":"#888";
+        ctx.fillRect(o.x,o.y,o.w,o.h);
+    });
+}
+
+/* =====================================================
+   PARTICLES
+===================================================== */
+let particles=[];
+
+function spawnParticles(x,y,count,color){
+    for(let i=0;i<count;i++){
+        particles.push({
+            x,y,
+            vx:rand(-300,300),
+            vy:rand(-600,0),
+            life:rand(0.3,0.6),
+            color
+        });
+    }
+}
+
+function updateParticles(dt){
+    particles.forEach(p=>{
+        p.life-=dt;
+        p.vy+=CONFIG.GRAVITY*dt*0.6;
+        p.x+=p.vx*dt;
+        p.y+=p.vy*dt;
+    });
+    particles=particles.filter(p=>p.life>0);
+}
+
+function drawParticles(){
+    particles.forEach(p=>{
+        ctx.globalAlpha=p.life;
+        ctx.fillStyle=p.color;
+        ctx.fillRect(p.x,p.y,4,4);
+        ctx.globalAlpha=1;
+    });
+}
+
+/* =====================================================
+   COLLISION / DEATH
+===================================================== */
+function checkDeath(){
+    for(const o of obstacles){
+        if(overlap(player,{x:o.x,y:o.y,w:o.w,h:o.h})){
+            die();
+            break;
+        }
+    }
+}
+
+function die(){
+    state="dead";
+    freeze=CONFIG.FREEZE_TIME;
+    shake=16;
+    spawnParticles(player.x+16,player.y+16,24,"#f55");
+}
+
+/* =====================================================
+   RESET
+===================================================== */
 function reset(){
- obstacles=[];
- particles=[];
- progress=0;
- gameOver=false;
- finished=false;
-
- ground=canvas.height*0.75;
- player.y=ground-player.s;
- player.vy=0;
- player.grounded=true;
+    state="playing";
+    speed=CONFIG.BASE_SPEED;
+    score=0;
+    obstacles=[];
+    particles=[];
+    nextSpawn=400;
+    player.y=0;
+    player.vy=0;
 }
 
-/* ============ INPUT (ANTI-CHEAT) ============ */
-let jumpPressed=false;
+/* =====================================================
+   HELPERS
+===================================================== */
+const groundY = ()=>CONFIG.HEIGHT-CONFIG.GROUND_HEIGHT;
 
-function pressJump(){
- if(jumpPressed) return; // prevents holding
- jumpPressed=true;
+/* =====================================================
+   GAME LOOP
+===================================================== */
+let last=0;
+function loop(t){
+    const dt=Math.min((t-last)/1000,0.033);
+    last=t;
 
- if(finished) return;
+    if(freeze>0){ freeze-=dt; draw(); requestAnimationFrame(loop); return; }
 
- if(gameOver){
-  reset();
-  return;
- }
-
- if(player.grounded){
-  player.vy=-14.5;
-  player.grounded=false;
- }
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
 }
 
-function releaseJump(){
- jumpPressed=false;
+function update(dt){
+    if(state==="playing"){
+        speed+=CONFIG.SPEED_INCREASE*dt;
+        score+=speed*dt*0.02;
+        player.update(dt);
+        updateObstacles(dt);
+        updateParticles(dt);
+        checkDeath();
+    }
 }
 
-addEventListener("touchstart",pressJump);
-addEventListener("touchend",releaseJump);
-addEventListener("keydown",e=>{
- if(e.code==="Space") pressJump();
-});
-addEventListener("keyup",e=>{
- if(e.code==="Space") releaseJump();
-});
-
-/* ============ SPAWNS ============ */
-setInterval(()=>{
- if(gameOver||finished) return;
- obstacles.push({
-  x:canvas.width,
-  y:ground-30,
-  w:30,h:30
- });
-},850);
-
-/* ============ PARTICLES ============ */
-function spawnDeathParticles(){
- for(let i=0;i<28;i++){
-  particles.push({
-   x:player.x+15,
-   y:player.y+15,
-   vx:(Math.random()-0.5)*9,
-   vy:(Math.random()-0.5)*9,
-   life:45
-  });
- }
-}
-
-/* ============ UPDATE ============ */
-function update(){
- if(finished) return;
-
- if(gameOver){
-  particles.forEach(p=>{
-   p.x+=p.vx;
-   p.y+=p.vy;
-   p.vy+=0.25;
-   p.life--;
-  });
-  particles=particles.filter(p=>p.life>0);
-  return;
- }
-
- // gradual speed ramp (smoother pacing)
- speed+=0.0008;
-
- player.vy+=gravity;
- player.y+=player.vy;
-
- if(player.y>=ground-player.s){
-  player.y=ground-player.s;
-  player.vy=0;
-  player.grounded=true;
- }
-
- obstacles.forEach(o=>{
-  o.x-=speed;
-  if(
-   player.x<o.x+o.w &&
-   player.x+player.s>o.x &&
-   player.y<o.y+o.h &&
-   player.y+player.s>o.y
-  ){
-   gameOver=true;
-   spawnDeathParticles();
-  }
- });
-
- obstacles=obstacles.filter(o=>o.x+o.w>0);
-
- progress+=speed;
- if(progress>=levelLength){
-  finished=true;
-  if(level===unlocked){
-   unlocked++;
-   localStorage.setItem("unlock",unlocked);
-  }
-  setTimeout(()=>{
-   document.getElementById("menu").style.display="flex";
-   buildMenu();
-  },1100);
- }
-}
-
-/* ============ DRAW ============ */
 function draw(){
- ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.save();
+    if(shake>0){
+        ctx.translate(rand(-shake,shake),rand(-shake,shake));
+        shake-=CONFIG.SHAKE_DECAY;
+    }
 
- ctx.fillStyle="#222";
- ctx.fillRect(0,ground,canvas.width,canvas.height-ground);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
 
- if(!gameOver){
-  ctx.fillStyle="cyan";
-  ctx.fillRect(player.x,player.y,player.s,player.s);
- }
+    ctx.fillStyle="#222";
+    ctx.fillRect(0,groundY(),canvas.width,CONFIG.GROUND_HEIGHT);
 
- ctx.fillStyle="white";
- obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+    drawObstacles();
+    drawParticles();
+    player.draw();
 
- particles.forEach(p=>{
-  ctx.fillStyle="orange";
-  ctx.fillRect(p.x,p.y,4,4);
- });
+    ctx.restore();
 
- ctx.fillStyle="white";
- ctx.fillText("Level "+level,20,30);
+    ctx.fillStyle="#fff";
+    ctx.font="20px Arial";
 
- if(gameOver){
-  ctx.font="30px Arial";
-  ctx.fillText(
-   "TAP TO RETRY",
-   canvas.width/2-95,
-   canvas.height/2
-  );
- }
+    if(state==="start"){
+        ctx.textAlign="center";
+        ctx.fillText("PRESS SPACE TO START",canvas.width/2,canvas.height/2);
+        if(Input.pressed){ Input.pressed=false; reset(); }
+    }
 
- if(finished){
-  ctx.font="30px Arial";
-  ctx.fillText(
-   "LEVEL COMPLETE",
-   canvas.width/2-140,
-   canvas.height/2
-  );
- }
+    if(state==="playing"){
+        ctx.fillText("Score: "+Math.floor(score),20,30);
+    }
+
+    if(state==="dead"){
+        ctx.textAlign="center";
+        ctx.fillText("FINAL SCORE: "+Math.floor(score),canvas.width/2,canvas.height/2);
+        ctx.fillText("PRESS SPACE TO RESTART",canvas.width/2,canvas.height/2+40);
+        if(Input.pressed){ Input.pressed=false; reset(); }
+    }
 }
 
-/* ============ LOOP ============ */
-function loop(){
- update();
- draw();
- requestAnimationFrame(loop);
-}
-loop();
+requestAnimationFrame(loop);
 </script>
 
 </body>
