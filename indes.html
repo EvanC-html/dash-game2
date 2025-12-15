@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dash Ultimate</title>
+<style>
+body{margin:0;background:black;overflow:hidden;font-family:Arial}
+canvas{display:block;margin:auto;background:#111}
+
+.menu{
+ position:fixed;
+ inset:0;
+ background:rgba(0,0,0,.9);
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ z-index:10;
+}
+
+.menuBox{
+ background:#111;
+ padding:22px;
+ border-radius:12px;
+ text-align:center;
+ color:white;
+}
+
+button{
+ display:block;
+ width:180px;
+ margin:8px auto;
+ padding:12px;
+ font-size:16px;
+ border:none;
+ border-radius:8px;
+}
+
+button.locked{
+ opacity:.4;
+}
+
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="menu" class="menu">
+ <div class="menuBox" id="menuBox"></div>
+</div>
+
+<script>
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
+
+function resize(){
+ canvas.width=innerWidth;
+ canvas.height=innerHeight;
+}
+resize();
+addEventListener("resize",resize);
+
+let ground,speed,gravity=0.7;
+let obstacles=[],platforms=[],stars=[];
+let level=1;
+let unlocked=Number(localStorage.getItem("unlock")||1);
+let collectedStars=Number(localStorage.getItem("stars")||0);
+let progress,levelLength;
+let gameOver=false,finished=false;
+let mode="cube";
+
+const player={x:100,y:0,s:30,vy:0,grounded:false};
+
+const levels=[
+ {len:2400,spd:5,mode:"cube"},
+ {len:3000,spd:6,mode:"ship"},
+ {len:3600,spd:6.5,mode:"cube"},
+ {len:4200,spd:7,mode:"wave"},
+ {len:4800,spd:7.5,mode:"cube"}
+];
+
+function buildMenu(){
+ const box=document.getElementById("menuBox");
+ box.innerHTML="";
+ box.innerHTML+=`<h2>Dash Ultimate</h2><p>Stars: ${collectedStars}</p>`;
+
+ levels.forEach((_,i)=>{
+  const btn=document.createElement("button");
+  btn.textContent="Level "+(i+1);
+
+  if(i+1>unlocked){
+   btn.classList.add("locked");
+   btn.disabled=true;
+  }else{
+   btn.addEventListener("click",()=>startLevel(i+1));
+  }
+
+  box.appendChild(btn);
+ });
+}
+
+buildMenu();
+
+function startLevel(n){
+ level=n;
+ const L=levels[n-1];
+ speed=L.spd;
+ levelLength=L.len;
+ mode=L.mode;
+
+ document.getElementById("menu").style.display="none";
+ reset();
+}
+
+function reset(){
+ obstacles=[];platforms=[];stars=[];
+ gameOver=false;finished=false;
+ ground=canvas.height*0.75;
+ player.y=ground-player.s;
+ player.vy=0;
+ progress=0;
+
+ for(let i=600;i<levelLength;i+=900){
+  stars.push({x:canvas.width+i,y:ground-100,r:8,collected:false});
+ }
+}
+
+function jump(){
+ if(gameOver||finished)return;
+
+ if(mode==="cube" && player.grounded){
+  player.vy=-13;
+  player.grounded=false;
+ }
+ if(mode==="ship"){
+  player.vy=-10;
+ }
+}
+
+addEventListener("touchstart",jump);
+addEventListener("keydown",e=>{if(e.code==="Space")jump();});
+
+setInterval(()=>{
+ if(gameOver||finished)return;
+ obstacles.push({x:canvas.width,y:ground-30,w:30,h:30});
+ if(Math.random()<0.3){
+  platforms.push({x:canvas.width,y:ground-120,w:90,h:12,dir:1});
+ }
+},1200);
+
+function hit(a,b){
+ return a.x<b.x+b.w&&a.x+a.s>b.x&&a.y<b.y+b.h&&a.y+a.s>b.y;
+}
+
+function update(){
+ if(gameOver||finished)return;
+
+ if(mode!=="wave")player.vy+=gravity;
+ player.y+=player.vy;
+
+ if(player.y>=ground-player.s){
+  player.y=ground-player.s;
+  player.vy=0;
+  player.grounded=true;
+ }
+
+ obstacles.forEach(o=>{
+  o.x-=speed;
+  if(hit(player,o))gameOver=true;
+ });
+
+ platforms.forEach(p=>{
+  p.x-=speed;
+  p.y+=p.dir*0.4;
+  if(p.y<ground-180||p.y>ground-60)p.dir*=-1;
+  if(hit(player,p)&&player.vy>0){
+   player.y=p.y-player.s;
+   player.vy=0;
+   player.grounded=true;
+  }
+ });
+
+ stars.forEach(s=>{
+  s.x-=speed;
+  if(!s.collected &&
+     Math.hypot(player.x+15-s.x,player.y+15-s.y)<20){
+   s.collected=true;
+   collectedStars++;
+   localStorage.setItem("stars",collectedStars);
+  }
+ });
+
+ stars=stars.filter(s=>!s.collected);
+ obstacles=obstacles.filter(o=>o.x+o.w>0);
+ platforms=platforms.filter(p=>p.x+p.w>0);
+
+ progress+=speed;
+ if(progress>=levelLength){
+  finished=true;
+  if(level===unlocked){
+   unlocked++;
+   localStorage.setItem("unlock",unlocked);
+  }
+  setTimeout(()=>{
+   document.getElementById("menu").style.display="flex";
+   buildMenu();
+  },1200);
+ }
+}
+
+function draw(){
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+
+ ctx.fillStyle="#222";
+ ctx.fillRect(0,ground,canvas.width,canvas.height-ground);
+
+ ctx.fillStyle="cyan";
+ ctx.fillRect(player.x,player.y,player.s,player.s);
+
+ ctx.fillStyle="white";
+ obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+
+ ctx.fillStyle="lime";
+ platforms.forEach(p=>ctx.fillRect(p.x,p.y,p.w,p.h));
+
+ ctx.fillStyle="yellow";
+ stars.forEach(s=>{
+  ctx.beginPath();
+  ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+  ctx.fill();
+ });
+
+ ctx.fillStyle="white";
+ ctx.fillText(`Level ${level} (${mode})`,20,30);
+}
+
+function loop(){
+ update();
+ draw();
+ requestAnimationFrame(loop);
+}
+loop();
+</script>
+
+</body>
+</html>
